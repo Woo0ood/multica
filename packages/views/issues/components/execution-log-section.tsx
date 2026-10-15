@@ -211,31 +211,7 @@ export function ExecutionLogSection({
           onOpen={openRuns}
         />
       </div>
-      {hasChildren && (
-        <label className="mb-2 flex w-fit cursor-pointer items-center gap-2 px-3 py-1 text-caption text-muted-foreground">
-          <Checkbox
-            aria-labelledby={scopeLabelId}
-            checked={includeDescendants}
-            onCheckedChange={setIncludeChildren}
-          />
-          <span id={scopeLabelId}>{t(($) => $.execution_log.include_children)}</span>
-        </label>
-      )}
-      {open && isPending && (
-        <div role="status" aria-label={t(($) => $.execution_log.loading)} className="space-y-2 px-3 py-1">
-          <Skeleton className="h-6 w-full" />
-          <Skeleton className="h-6 w-3/4" />
-        </div>
-      )}
-      {open && isError && (
-        <button type="button" onClick={() => void refetch()} className="px-3 py-1 text-caption text-destructive underline">
-          {t(($) => $.execution_log.load_failed_retry)}
-        </button>
-      )}
-      {open && !isPending && !isError && tasks.filter((task) => task.status !== "deferred").length === 0 && (
-        <p className="px-3 py-1 text-caption text-muted-foreground">{t(($) => $.execution_log.empty)}</p>
-      )}
-      {open && !isPending && !isError && tasks.some((task) => task.status !== "deferred") && (
+      {open && (
         <div className="space-y-0.5 pl-2">
           {activeTasks.map((task) => (
             <ActiveTaskRow key={task.id} task={task} issueId={task.issue_id || issueId} showIssue={includeDescendants} />
@@ -257,29 +233,51 @@ export function ExecutionLogSection({
             </p>
           )}
 
-          {latest.length > 0 && (
-            <>
-              <div className="px-1 pt-2 pb-0.5 text-micro text-muted-foreground">
-                {t(($) => $.execution_log.latest)}
-              </div>
-              {latest.map((task) => (
-                <PastRow key={task.id} task={task} issueId={task.issue_id || issueId} showIssue={includeDescendants} />
-              ))}
-            </>
+          {(latest.length > 0 || hasChildren) && (
+            <div className="flex min-h-7 items-center justify-between gap-2 px-1 pt-2 pb-0.5 text-micro text-muted-foreground">
+              <span>{t(($) => $.execution_log.latest)}</span>
+              {hasChildren && (
+                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap">
+                  <Checkbox
+                    aria-labelledby={scopeLabelId}
+                    checked={includeDescendants}
+                    onCheckedChange={setIncludeChildren}
+                    className="size-3 [&_svg]:size-2.5"
+                  />
+                  <span id={scopeLabelId}>{t(($) => $.execution_log.include_children)}</span>
+                </label>
+              )}
+            </div>
           )}
-          <button
-            type="button"
-            onClick={openRuns}
-            className="flex w-full items-center gap-1.5 rounded-xs px-1 py-1.5 text-caption transition-colors hover:bg-accent/40"
-          >
-            <Maximize2 aria-hidden className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate">{t(($) => $.execution_log.open_timeline)}</span>
-            {hiddenCount > 0 && (
-              <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
-                {t(($) => $.execution_log.more_runs, { count: hiddenCount })}
-              </span>
-            )}
-          </button>
+          {isPending ? (
+            <div role="status" aria-label={t(($) => $.execution_log.loading)} className="space-y-2 px-1 py-1">
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-3/4" />
+            </div>
+          ) : isError ? (
+            <button type="button" onClick={() => void refetch()} className="px-1 py-1 text-caption text-destructive underline">
+              {t(($) => $.execution_log.load_failed_retry)}
+            </button>
+          ) : tasks.every((task) => task.status === "deferred") ? (
+            <p className="px-1 py-1 text-caption text-muted-foreground">{t(($) => $.execution_log.empty)}</p>
+          ) : latest.map((task) => (
+            <PastRow key={task.id} task={task} issueId={task.issue_id || issueId} showIssue={includeDescendants} />
+          ))}
+          {!isPending && !isError && timeline.runs.length > 0 && (
+            <button
+              type="button"
+              onClick={openRuns}
+              className="flex w-full items-center gap-1.5 rounded-xs px-1 py-1.5 text-caption transition-colors hover:bg-accent/40"
+            >
+              <Maximize2 aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+              <span className="truncate">{t(($) => $.execution_log.open_timeline)}</span>
+              {hiddenCount > 0 && (
+                <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+                  {t(($) => $.execution_log.more_runs, { count: hiddenCount })}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       )}
       <IssueRunsDialog
