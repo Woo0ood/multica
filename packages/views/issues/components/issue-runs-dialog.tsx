@@ -90,6 +90,7 @@ export function IssueRunsDialog({
   identifier,
   issueTitle,
   tasks,
+  includeDescendants = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -97,6 +98,7 @@ export function IssueRunsDialog({
   identifier: string;
   issueTitle?: string;
   tasks: AgentTask[];
+  includeDescendants?: boolean;
 }) {
   const { t } = useT("issues");
   // `estimateCost` reads custom rates imperatively out of the Zustand store,
@@ -131,6 +133,7 @@ export function IssueRunsDialog({
           <DialogTitle>{t(($) => $.runs_timeline.title)}</DialogTitle>
           <DialogDescription>
             {issueTitle ? `${identifier} · ${issueTitle}` : identifier}
+            {includeDescendants && ` · ${t(($) => $.execution_log.descendants_scope)}`}
           </DialogDescription>
         </DialogHeader>
 
@@ -141,7 +144,7 @@ export function IssueRunsDialog({
             {/* `min-h-0`: the dialog is a flex column; without it this flex
                 item sizes to its content and the list never scrolls. */}
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-5">
-              <RunDayList timeline={timeline} issueId={issueId} />
+              <RunDayList timeline={timeline} issueId={issueId} showIssue={includeDescendants} />
               <div className="mt-4 space-y-1 text-micro text-muted-foreground">
                 {unmapped.length > 0 && (
                   <p>{t(($) => $.runs_timeline.note_unmapped, { models: unmapped.join(", ") })}</p>
@@ -622,6 +625,7 @@ function RunHoverCard({ run }: { run: TimelineRun }) {
     hour12: false,
   }).format(run.startMs);
   const facts = [
+    run.task.issue_identifier,
     when,
     run.task.status === "completed" && run.durationMs != null
       ? formatDuration(run.durationMs / 1000, UNDER_A_SECOND)
@@ -696,7 +700,7 @@ function IdleHoverCard({
 
 // ─── List ──────────────────────────────────────────────────────────────────
 
-function RunDayList({ timeline, issueId }: { timeline: RunTimeline; issueId: string }) {
+function RunDayList({ timeline, issueId, showIssue }: { timeline: RunTimeline; issueId: string; showIssue: boolean }) {
   const { t } = useT("issues");
   const locale = useLocale();
   const partLabel = useCostPartLabel();
@@ -747,7 +751,8 @@ function RunDayList({ timeline, issueId }: { timeline: RunTimeline; issueId: str
             <RunListRow
               key={run.task.id}
               run={run}
-              issueId={issueId}
+              issueId={run.task.issue_id || issueId}
+              showIssue={showIssue}
               maxCost={timeline.maxRunCost}
             />
           ))}
@@ -761,10 +766,12 @@ function RunListRow({
   run,
   issueId,
   maxCost,
+  showIssue,
 }: {
   run: TimelineRun;
   issueId: string;
   maxCost: number;
+  showIssue: boolean;
 }) {
   const { t } = useT("issues");
   const { t: tAgents } = useT("agents");
@@ -812,6 +819,11 @@ function RunListRow({
               run.usage || run.active ? "text-foreground" : "text-muted-foreground",
             )}
           >
+            {showIssue && (
+              <span className="mr-2 font-mono text-micro text-muted-foreground" title={task.issue_title}>
+                {task.issue_identifier || task.issue_id}
+              </span>
+            )}
             {text}
           </span>
         )}
