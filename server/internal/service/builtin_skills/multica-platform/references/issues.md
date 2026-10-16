@@ -274,6 +274,9 @@ The issue sidebar's **Include sub-issues** checkbox uses
 every descendant at any depth. This is full, uncapped execution history with
 per-run usage and owning issue labels, never ancestors or siblings. It drives
 the sidebar totals, status indicators, spend chart, and complete Runs timeline.
+The Runs dialog inherits the sidebar scope when opened and provides its own
+checkbox beside the issue title. Changing it updates only the dialog; reopening
+the dialog inherits the sidebar selection again.
 The default endpoint still returns only the current issue. The subtree scope
 is separate from the active-only family coordination read below.
 

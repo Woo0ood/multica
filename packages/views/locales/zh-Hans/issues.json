@@ -687,8 +687,7 @@
     "cancel_failed": "取消运行失败"
   },
   "execution_log": {
-    "include_children": "包含子 issue",
-    "descendants_scope": "包含所有层级的子 issue",
+    "include_children": "包含子任务",
     "loading": "正在加载运行记录...",
     "load_failed_retry": "无法加载运行记录，点击重试",
     "empty": "此范围内暂无运行记录。",

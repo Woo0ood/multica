@@ -715,7 +715,6 @@
   },
   "execution_log": {
     "include_children": "Include sub-issues",
-    "descendants_scope": "Includes all descendant issues",
     "loading": "Loading runs...",
     "load_failed_retry": "Could not load runs. Retry",
     "empty": "No runs in this scope.",
