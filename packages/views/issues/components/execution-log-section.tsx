@@ -286,7 +286,7 @@ export function ExecutionLogSection({
         issueId={issueId}
         identifier={identifier ?? ""}
         issueTitle={issueTitle}
-        tasks={tasks}
+        hasChildren={hasChildren}
         includeDescendants={includeDescendants}
       />
     </div>

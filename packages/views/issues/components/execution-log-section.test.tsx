@@ -110,12 +110,77 @@ describe("subtree execution log", () => {
     expect(within(header).getByText("1")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open timeline" }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText(/Includes all descendant issues/)).toBeInTheDocument();
+    const dialogToggle = within(dialog).getByRole("checkbox", { name: "Include sub-issues" });
+    expect(dialogToggle).toBeChecked();
     expect(within(dialog).getByText("MUL-3")).toBeInTheDocument();
+    fireEvent.click(dialogToggle);
+    expect(dialogToggle).not.toBeChecked();
+    expect(toggle).toBeChecked();
+    expect(within(dialog).getByText("Spent").parentElement).toHaveTextContent("$1.00");
+    expect(within(dialog).getByRole("img", { name: "Cumulative cost over time: $1.00 across 1 run" })).toBeInTheDocument();
+    expect(within(dialog).getByTitle("Parent run")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Grandchild run")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("MUL-2")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/1 running/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open timeline" }));
+    expect(within(screen.getByRole("dialog")).getByRole("checkbox", { name: "Include sub-issues" })).toBeChecked();
+    expect(within(screen.getByRole("dialog")).getByText("Grandchild run")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(toggle);
     expect(screen.getByText("1 run")).toBeInTheDocument();
     expect(screen.queryByText("Grandchild run")).not.toBeInTheDocument();
+  });
+
+  it("can expand only the dialog when the sidebar excludes descendants", async () => {
+    vi.useRealTimers();
+    const own = makeTask({ status: "completed", completed_at: "2026-06-08T08:02:00Z", trigger_summary: "Parent run" });
+    const child = makeTask({ id: "child", issue_id: "child-issue", issue_identifier: "MUL-2", trigger_summary: "Child run" });
+    const client = new ApiClient("https://api.example.test");
+    setApiInstance(client);
+    let rejectRequest!: (error: Error) => void;
+    const list = vi.spyOn(client, "listTasksByIssue").mockImplementation(() =>
+      new Promise((_, reject) => { rejectRequest = reject; }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(issueKeys.tasks("issue-1"), [own]);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <ExecutionLogSection issueId="issue-1" hasChildren />
+      </QueryClientProvider>,
+    );
+    const outerToggle = screen.getByRole("checkbox", { name: "Include sub-issues" });
+    fireEvent.click(screen.getByRole("button", { name: "Open timeline" }));
+    const dialog = screen.getByRole("dialog");
+    const toggle = within(dialog).getByRole("checkbox", { name: "Include sub-issues" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(list).toHaveBeenCalledWith("issue-1", true);
+    expect(within(dialog).getByRole("status", { name: "Loading runs..." })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("img")).not.toBeInTheDocument();
+    await act(async () => { rejectRequest(new Error("unavailable")); });
+    const retry = await within(dialog).findByRole("button", { name: "Could not load runs. Retry" });
+    list.mockResolvedValue([own, child]);
+    fireEvent.click(retry);
+    expect(await within(dialog).findByText("Child run")).toBeInTheDocument();
+    expect(outerToggle).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByText("Child run")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open timeline" }));
+    expect(within(screen.getByRole("dialog")).getByRole("checkbox", { name: "Include sub-issues" })).not.toBeChecked();
+    queryClient.clear();
+  });
+
+  it("shows an empty dialog scope when only descendants have runs", () => {
+    renderParent([], [makeTask({ id: "child", issue_id: "child-issue" })]);
+    const outerToggle = screen.getByRole("checkbox", { name: "Include sub-issues" });
+    fireEvent.click(outerToggle);
+    fireEvent.click(screen.getByRole("button", { name: "Open timeline" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Include sub-issues" }));
+    expect(within(dialog).getByText("No runs in this scope.")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("img")).not.toBeInTheDocument();
+    expect(outerToggle).toBeChecked();
   });
 
   it("offers subtree history even when the parent has no runs, and retries the owning child", async () => {
