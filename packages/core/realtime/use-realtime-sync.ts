@@ -18,6 +18,7 @@ import { runtimeKeys } from "../runtimes/queries";
 import { labelKeys } from "../labels/queries";
 import { propertyKeys } from "../properties/queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
+import { issueWorkflowKeys } from "../issue-workflows/queries";
 import {
   agentTaskSnapshotKeys,
   workspaceWorkingAgentsKeys,
@@ -58,6 +59,7 @@ import {
   type SystemNotificationPayload,
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
+import type { AgentTask } from "../types/agent";
 import {
   chatKeys,
   isTaskMessageTimelineHeld,
@@ -668,6 +670,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     // 5-minute staleTime — long enough to offer a status the server already
     // archived, or to keep painting its old name.
     qc.invalidateQueries({ queryKey: issueStatusKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
   }
   // Cross-workspace, so outside the wsId guard: a reconnect may have missed
   // inbox events from any workspace, so re-pull the switcher-dot summary.
@@ -827,6 +830,9 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+          // Workflow responses include the projects using them. Creating,
+          // deleting or changing a project also changes that usage list.
+          qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
           // The issue table can filter on a project's status, so a
           // project create/update/delete changes which issues a filtered
           // window holds. The payload carries no previous status to compare
@@ -881,6 +887,12 @@ export function useRealtimeSync(
             },
           });
         }
+      },
+      // Workspace workflows (MUL-7420). Same contract as the status catalog:
+      // the event carries no row, so every write answers with one list read.
+      issue_workflow: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: issueWorkflowKeys.all(wsId) });
       },
       pin: () => {
         const wsId = getCurrentWsId();
@@ -1077,8 +1089,17 @@ export function useRealtimeSync(
       const payload = p as IssueUpdatedPayload;
       const { issue } = payload;
       if (!issue?.id) return;
-      // Reparenting and title changes affect every open subtree execution log.
-      qc.invalidateQueries({ queryKey: issueKeys.tasksAll(), predicate: (q) => q.queryKey[3] === "subtree" });
+      const subtreeFilter = {
+        queryKey: issueKeys.tasksAll(),
+        predicate: (q: { queryKey: readonly unknown[] }) => q.queryKey[3] === "subtree",
+      };
+      if (payload.parent_changed) {
+        qc.invalidateQueries(subtreeFilter);
+      } else if (payload.title_changed) {
+        qc.setQueriesData<AgentTask[]>(subtreeFilter, (tasks) => tasks?.map((task) =>
+          task.issue_id === issue.id ? { ...task, issue_title: issue.title } : task,
+        ));
+      }
       const wsId = getCurrentWsId();
       if (wsId) {
         onIssueUpdated(qc, wsId, issue, {
@@ -1102,7 +1123,6 @@ export function useRealtimeSync(
     const unsubIssueCreated = ws.on("issue:created", (p) => {
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
-      qc.invalidateQueries({ queryKey: issueKeys.tasksAll(), predicate: (q) => q.queryKey[3] === "subtree" });
       const wsId = getCurrentWsId();
       if (wsId) onIssueCreated(qc, wsId, issue);
     });

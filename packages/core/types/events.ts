@@ -79,6 +79,7 @@ export type WSEventType =
   | "property:created"
   | "property:updated"
   | "issue_status:changed"
+  | "issue_workflow:changed"
   | "pin:created"
   | "pin:deleted"
   | "pin:reordered"
@@ -117,6 +118,9 @@ export interface IssueUpdatedPayload {
   assignee_changed?: boolean;
   status_changed?: boolean;
   project_changed?: boolean;
+  title_changed?: boolean;
+  parent_changed?: boolean;
+  prev_parent_issue_id?: string | null;
   // Both ends of a duplicate-mark change (MUL-7349). The mark is not on Issue,
   // so these tell the realtime layer whose duplicate relations to refresh.
   duplicate_of_issue_id?: string | null;
@@ -168,6 +172,10 @@ export interface PropertyChangedPayload {
  */
 export interface IssueStatusChangedPayload {
   action?: "created" | "updated" | "archived" | "reordered";
+}
+
+export interface IssueWorkflowChangedPayload {
+  action?: "created" | "updated" | "deleted";
 }
 
 export interface AgentStatusPayload {
@@ -578,6 +586,7 @@ export interface WSEventPayloadMap {
   "property:created": PropertyChangedPayload;
   "property:updated": PropertyChangedPayload;
   "issue_status:changed": IssueStatusChangedPayload;
+  "issue_workflow:changed": IssueWorkflowChangedPayload;
   "issue_reaction:added": IssueReactionAddedPayload;
   "issue_reaction:removed": IssueReactionRemovedPayload;
   "comment:created": CommentCreatedPayload;

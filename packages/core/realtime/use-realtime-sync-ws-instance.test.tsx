@@ -13,13 +13,14 @@ import { runtimeKeys } from "../runtimes/queries";
 import { workspaceWorkingAgentsKeys } from "../agents/queries";
 import { workspaceKeys } from "../workspace/queries";
 import { issueStatusKeys } from "../issue-statuses/queries";
+import { issueWorkflowKeys } from "../issue-workflows/queries";
 import {
   markWorkspaceDeletePending,
   unmarkWorkspaceDeletePending,
 } from "../workspace/pending-delete";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import type { IssueTableQuerySpec } from "../types";
+import type { AgentTask, IssueTableQuerySpec } from "../types";
 import { getCurrentWsId } from "../platform/workspace-storage";
 import { forgetLocalSearchIndex } from "../search-index/instance";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
@@ -126,15 +127,15 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (16 workspace-scoped [incl. property definitions] + 6 per-issue
-    // prefixes + the workspace working-agents projection + 5 per-chat
-    // prefixes + 1 workspaceKeys.list() + 1 cross-workspace inbox unread
-    // summary = 31 calls).
+    // (17 workspace-scoped [incl. property definitions and workflows] + 6
+    // per-issue prefixes + the workspace working-agents projection + 5
+    // per-chat prefixes + 1 workspaceKeys.list() + 1 cross-workspace inbox
+    // unread summary = 32 calls).
     //
     // Awaited rather than counted synchronously: the inbox unread summary
     // refresh cancels any in-flight request before invalidating (see
     // onInboxSummaryInvalidate), so that one lands after the synchronous ones.
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(31));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(32));
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -171,6 +172,24 @@ describe("useRealtimeSync — ws instance change", () => {
     // A catalog edit made while this client was disconnected is otherwise
     // invisible for the query's whole 5-minute staleTime.
     expect(calls).toContainEqual(issueStatusKeys.all("ws-1"));
+  });
+
+  it.each(["project:created", "project:updated", "project:deleted"])("refreshes workflow usage after %s", (type) => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
+      const onAny = vi.mocked(ws.onAny).mock.calls[0]![0];
+      invalidateSpy.mockClear();
+
+      onAny({ type, payload: {} } as never);
+      vi.advanceTimersByTime(100);
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: issueWorkflowKeys.all("ws-1") });
+      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: issueWorkflowKeys.all("ws-2") });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("invalidates agent projections when a daemon changes liveness", () => {
@@ -245,20 +264,71 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(calls).toContainEqual(["task-messages"]);
   });
 
-  it.each(["issue:updated", "issue:created", "issue:deleted"])(
-    "refreshes recursive execution logs when hierarchy changes through %s",
-    (event) => {
-      const ws = createMockWs();
-      renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
-      qc.setQueryData(issueKeys.tasks("parent"), []);
-      qc.setQueryData(issueKeys.subtreeTasks("parent"), []);
+  function subtreeEvents() {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
+    const rows = [
+      { id: "run", issue_id: "child", issue_title: "Old title" },
+      { id: "other-run", issue_id: "other", issue_title: "Other title" },
+    ] as AgentTask[];
+    qc.setQueryData(issueKeys.tasks("parent"), rows);
+    qc.setQueryData(issueKeys.subtreeTasks("parent"), rows);
+    qc.setQueryData(issueKeys.subtreeTasks("another-parent"), rows);
+    return (event: string, payload: unknown) => {
       const handler = vi.mocked(ws.on).mock.calls.find(([name]) => name === event)?.[1];
       expect(handler).toBeDefined();
-      handler!({ issue: { id: "child", parent_issue_id: "parent" }, issue_id: "child" } as never);
-      expect(qc.getQueryState(issueKeys.subtreeTasks("parent"))?.isInvalidated).toBe(true);
-      expect(qc.getQueryState(issueKeys.tasks("parent"))?.isInvalidated).toBe(false);
-    },
-  );
+      handler!(payload as never);
+    };
+  }
+
+  it.each([
+    { status_changed: true, issue: { id: "child", status: "in_progress" } },
+    { assignee_changed: true, issue: { id: "child" } },
+    { priority_changed: true, issue: { id: "child" } },
+    { parent_changed: false, issue: { id: "child", parent_issue_id: "parent" } },
+  ])("does not refetch subtree history for an unrelated issue update: %j", (payload) => {
+    const emit = subtreeEvents();
+    emit("issue:updated", payload);
+    expect(qc.getQueryState(issueKeys.subtreeTasks("parent"))?.isInvalidated).toBe(false);
+    expect(qc.getQueryState(issueKeys.tasks("parent"))?.isInvalidated).toBe(false);
+  });
+
+  it("patches matching owning-issue titles across subtree caches without refetching", () => {
+    const emit = subtreeEvents();
+    const fetchRuns = vi.fn(async () => []);
+    const observer = new QueryObserver(qc, {
+      queryKey: issueKeys.subtreeTasks("parent"), queryFn: fetchRuns, staleTime: Infinity,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      emit("issue:updated", { issue: { id: "child", title: "New title" }, title_changed: true });
+      for (const root of ["parent", "another-parent"]) {
+        expect(qc.getQueryData(issueKeys.subtreeTasks(root))).toMatchObject([
+          { issue_id: "child", issue_title: "New title" },
+          { issue_id: "other", issue_title: "Other title" },
+        ]);
+        expect(qc.getQueryState(issueKeys.subtreeTasks(root))?.isInvalidated).toBe(false);
+      }
+      expect(qc.getQueryData<AgentTask[]>(issueKeys.tasks("parent"))?.[0]?.issue_title).toBe("Old title");
+      expect(fetchRuns).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each(["issue:updated", "issue:deleted"])("invalidates subtree history for a hierarchy change: %s", (event) => {
+    const emit = subtreeEvents();
+    emit(event, { issue: { id: "child", parent_issue_id: "new-parent" }, parent_changed: true, prev_parent_issue_id: "parent", issue_id: "child" });
+    expect(qc.getQueryState(issueKeys.subtreeTasks("parent"))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(issueKeys.subtreeTasks("another-parent"))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(issueKeys.tasks("parent"))?.isInvalidated).toBe(false);
+  });
+
+  it("does not invalidate subtree history when an issue is created", () => {
+    const emit = subtreeEvents();
+    emit("issue:created", { issue: { id: "child", parent_issue_id: "parent" } });
+    expect(qc.getQueryState(issueKeys.subtreeTasks("parent"))?.isInvalidated).toBe(false);
+  });
 
   it("invalidates per-chat-session caches after an established ws reconnects", () => {
     const ws = createMockWs();

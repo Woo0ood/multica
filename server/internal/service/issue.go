@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"log/slog"
 	"sort"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/issueposition"
 	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -270,6 +272,18 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		if current.Digest != p.SourceContext.Digest {
 			return IssueCreateResult{}, ErrSourceContextChanged
 		}
+	}
+
+	// Project workflow (MUL-7420): an issue created in a project whose named
+	// workflow does not list the requested status starts on todo instead.
+	// The HTTP create path already rejects an explicit status outside the
+	// workflow; this keeps the other creators (channels, captured comments)
+	// inside it too. Resolved before the custom-status guard below so that
+	// guard checks the status actually written.
+	if def, err := s.createWorkflow(ctx, qtx, p); err != nil {
+		return IssueCreateResult{}, err
+	} else if def != nil && !def.IsDefault && !def.Has(p.Status) {
+		p.Status = issueworkflow.StartStatus
 	}
 
 	// A create landing on a CUSTOM status takes the shared catalog lock AND
@@ -536,6 +550,13 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	s.captureCreatedAnalytics(issue, p.CreatorType, actorID, opts)
 	if opts.AssignedAgentRunFireAt.IsZero() {
 		assignedTaskID = s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.AssignedAgentRunFireAt)
+	}
+	// Creating an issue already assigned to an agent is the member delegating
+	// work. The run itself is attributed through the creator fallback, which
+	// system wakeups share, so record the action here, at the create, for both
+	// the immediate and the deferred (channel media) path.
+	if assignedTaskID.Valid && p.CreatorType == "member" {
+		s.TaskService.RecordHumanDelegation(ctx, attribution.DirectHumanRun(p.CreatorID, attribution.EvidenceIssueAssignment, issue.ID))
 	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
@@ -825,6 +846,22 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 	}
 }
 
+// createWorkflow resolves the workflow of the project a new issue lands in:
+// its own project, or its parent's when it names none.
+func (s *IssueService) createWorkflow(ctx context.Context, qtx *db.Queries, p IssueCreateParams) (*issueworkflow.Definition, error) {
+	projectID := p.ProjectID
+	if !projectID.Valid && p.ParentIssueID.Valid {
+		parent, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: p.ParentIssueID, WorkspaceID: p.WorkspaceID})
+		if err != nil {
+			// The parent check below reports a missing parent.
+			return nil, nil
+		}
+		projectID = parent.ProjectID
+	}
+	def, _, err := issueworkflow.ForProject(ctx, qtx, p.WorkspaceID, projectID)
+	return def, err
+}
+
 func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time) pgtype.UUID {
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return pgtype.UUID{}
@@ -966,5 +1003,12 @@ func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issu
 			"squad_id", util.UUIDToString(squad.ID),
 			"leader_id", util.UUIDToString(squad.LeaderID),
 			"error", err)
+		return
+	}
+	// A member creating an issue assigned to a squad delegates the same way as
+	// one assigned to an agent (see Create). A trigger comment, when present,
+	// already recorded its author at enqueue.
+	if !triggerCommentID.Valid && authorType == "member" {
+		s.TaskService.RecordHumanDelegation(ctx, attribution.DirectHumanRun(issue.CreatorID, attribution.EvidenceIssueAssignment, issue.ID))
 	}
 }
